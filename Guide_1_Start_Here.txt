@@ -1,0 +1,59 @@
+GUIDE 1: HOW TO START THE APP
+=============================
+READ THIS FILE FIRST.
+
+Follow these steps exactly to turn on the software.
+
+------------------------------------------------------------------
+STEP 1: OPEN THE PROJECT
+------------------------------------------------------------------
+1. Open the "VS Code" program on your computer.
+2. Go to the top menu: "File" > "Open Folder".
+3. Select the "Candidate Intelligence Platform" folder.
+
+------------------------------------------------------------------
+STEP 2: START THE BRAIN (BACKEND)
+------------------------------------------------------------------
+1. In VS Code, look at the top menu and click: "Terminal" -> "New Terminal".
+   (A black panel will open at the bottom).
+
+2. Click inside that panel and type this command:
+   cd backend
+   (Press ENTER)
+
+3. IMPORTANT: Turn on the system tools by typing this:
+   .\venv\Scripts\activate
+   (Press ENTER)
+   -> You should see text generally like "(venv)" appear in green.
+
+4. Start the server by typing this:
+   uvicorn main:app --reload
+   (Press ENTER)
+
+   -> Wait until it says "Application startup complete".
+   -> LEAVE THIS RUNNING. Do not close it.
+
+------------------------------------------------------------------
+STEP 3: START THE SCREEN (FRONTEND)
+------------------------------------------------------------------
+1. In that same bottom panel, look for a small "+" sign (usually on the right side).
+   Click it to open a NEW, empty terminal window.
+
+2. In this new window, type:
+   cd frontend
+   (Press ENTER)
+
+3. Start the screen by typing:
+   npm run dev
+   (Press ENTER)
+
+------------------------------------------------------------------
+STEP 4: OPEN IN BROWSER
+------------------------------------------------------------------
+1. Open your web browser (Chrome, Edge, etc.).
+2. In the top address bar, type exactly:
+   http://localhost:5173
+3. Press ENTER.
+
+Success! The app is now running.
+Now read the file "Guide_2_How_To_Use.txt" to learn how to use it.

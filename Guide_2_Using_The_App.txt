@@ -1,0 +1,47 @@
+GUIDE 2: HOW TO USE THE APP
+===========================
+Use this guide AFTER you have started the app.
+
+This software helps you hire the best people. Here is how to use each tab in the menu:
+
+------------------------------------------------------------------
+1. Job Description
+------------------------------------------------------------------
+* START HERE.
+* Copy the text of your Job Description (from Word, email, etc.).
+* Paste it into the box on this page.
+* This tells the AI what job you are hiring for so it knows what to look for/verify.
+
+------------------------------------------------------------------
+2. Import & View Results
+------------------------------------------------------------------
+* Go here to bring new resumes into the system.
+* You will see the list of candidates that have been imported.
+* Check this list to make sure everyone you want to evaluate is there.
+
+------------------------------------------------------------------
+3. Run Analysis and Results
+------------------------------------------------------------------
+* This is your main "Report Card" page.
+* The AI compares the candidates against your Job Description.
+* It will show you who PASSED and who FAILED.
+* Click on a candidate to see detailed reasons for the result.
+
+------------------------------------------------------------------
+4. HR Questions
+------------------------------------------------------------------
+* Need to interview someone? Go here.
+* The AI will give you a list of custom questions to ask the candidate.
+* It creates these questions based on the candidate's specific profile and your job description.
+
+------------------------------------------------------------------
+5. Interviews
+------------------------------------------------------------------
+* Use this page to schedule and manage your interview times.
+* It helps you keep track of when you are meeting your top choices.
+
+------------------------------------------------------------------
+TROUBLESHOOTING
+------------------------------------------------------------------
+* If the screen goes blank, check the VS Code window (make sure it is still open).
+* If you see red error text in VS Code, take a photo of it to send to support.
