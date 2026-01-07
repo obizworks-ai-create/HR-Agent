@@ -18,4 +18,18 @@ api.interceptors.request.use(
     }
 );
 
+// Add a response interceptor
+api.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        if (error.response && error.response.status === 401) {
+            // Clear invalid token
+            localStorage.removeItem('admin_password');
+            // Force redirect to login
+            window.location.href = '/login';
+        }
+        return Promise.reject(error);
+    }
+);
+
 export default api;
