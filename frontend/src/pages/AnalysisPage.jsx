@@ -15,8 +15,9 @@ const AnalysisPage = () => {
     const [verdictFilter, setVerdictFilter] = useState("ALL"); // ALL, PASS, FAIL
 
     // NEW: Date Filtering State
-    const [timePeriod, setTimePeriod] = useState("ALL"); // ALL, LAST_7_DAYS, LAST_30_DAYS, CUSTOM
+    const [timePeriod, setTimePeriod] = useState("ALL"); // ALL, LAST_24_HOURS, LAST_7_DAYS, LAST_30_DAYS, CUSTOM, CUSTOM_RANGE
     const [customDate, setCustomDate] = useState("");
+    const [customEndDate, setCustomEndDate] = useState("");
 
     // NEW: Filter candidates locally by Verdict if needed (or backend)
     // The requirement is "filter displayed results". Backend /candidates supports date filter.
@@ -102,7 +103,9 @@ const AnalysisPage = () => {
             if (timePeriod !== "ALL") {
                 url += `&time_period=${timePeriod}`;
                 if (timePeriod === "CUSTOM" && customDate) {
-                    url += `&custom_date=${customDate}`;
+                    url += `&start_date=${customDate}&end_date=${customDate}`;
+                } else if (timePeriod === "CUSTOM_RANGE" && customDate && customEndDate) {
+                    url += `&start_date=${customDate}&end_date=${customEndDate}`;
                 }
             }
 
@@ -140,9 +143,11 @@ const AnalysisPage = () => {
                             className="bg-transparent border-none text-sm font-semibold text-gray-700 focus:ring-0 cursor-pointer"
                         >
                             <option value="ALL">All Time</option>
+                            <option value="LAST_24_HOURS">Today</option>
                             <option value="LAST_7_DAYS">Last 7 Days</option>
                             <option value="LAST_30_DAYS">Last 30 Days</option>
-                            <option value="CUSTOM">Custom Date</option>
+                            <option value="CUSTOM">Specific Date</option>
+                            <option value="CUSTOM_RANGE">Date Range</option>
                         </select>
                         {timePeriod === "CUSTOM" && (
                             <input
@@ -151,6 +156,25 @@ const AnalysisPage = () => {
                                 onChange={(e) => setCustomDate(e.target.value)}
                                 className="ml-2 border border-gray-300 rounded-lg px-2 py-1 text-sm bg-gray-50"
                             />
+                        )}
+                        {timePeriod === "CUSTOM_RANGE" && (
+                            <div className="flex items-center gap-2 ml-2">
+                                <input
+                                    type="date"
+                                    value={customDate}
+                                    onChange={(e) => setCustomDate(e.target.value)}
+                                    className="border border-gray-300 rounded-lg px-2 py-1 text-sm bg-gray-50"
+                                    placeholder="Start"
+                                />
+                                <span className="text-gray-500 text-sm">to</span>
+                                <input
+                                    type="date"
+                                    value={customEndDate}
+                                    onChange={(e) => setCustomEndDate(e.target.value)}
+                                    className="border border-gray-300 rounded-lg px-2 py-1 text-sm bg-gray-50"
+                                    placeholder="End"
+                                />
+                            </div>
                         )}
                     </div>
 
