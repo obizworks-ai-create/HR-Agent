@@ -205,6 +205,7 @@ const CandidateDashboard = () => {
                                 className="bg-transparent border-none text-sm font-semibold text-gray-700 focus:ring-0 cursor-pointer"
                             >
                                 <option value="ALL">All Time</option>
+                                <option value="LAST_24_HOURS">Today</option>
                                 <option value="LAST_7_DAYS">Last 7 Days</option>
                                 <option value="LAST_30_DAYS">Last 30 Days</option>
                                 <option value="CUSTOM_SINGLE">Specific Date</option>
@@ -220,15 +221,15 @@ const CandidateDashboard = () => {
                             )}
                             {timePeriod === "CUSTOM_RANGE" && (
                                 <div className="flex items-center gap-2 ml-2">
-                                    <input 
-                                        type="date" 
+                                    <input
+                                        type="date"
                                         value={customStartDate}
                                         onChange={(e) => setCustomStartDate(e.target.value)}
                                         className="border border-gray-300 rounded-lg px-2 py-1 text-sm bg-gray-50"
                                     />
                                     <span className="text-gray-500 text-sm">to</span>
-                                    <input 
-                                        type="date" 
+                                    <input
+                                        type="date"
                                         value={customEndDate}
                                         onChange={(e) => setCustomEndDate(e.target.value)}
                                         className="border border-gray-300 rounded-lg px-2 py-1 text-sm bg-gray-50"
