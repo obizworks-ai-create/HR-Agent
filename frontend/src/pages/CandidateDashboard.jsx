@@ -57,7 +57,10 @@ const CandidateDashboard = () => {
             let startDateStr = "";
             let endDateStr = "";
 
-            if (timePeriod === "LAST_7_DAYS") {
+            if (timePeriod === "LAST_24_HOURS") { // Fix: Add handling for Today
+                startDateStr = today.toISOString().split('T')[0];
+                endDateStr = today.toISOString().split('T')[0];
+            } else if (timePeriod === "LAST_7_DAYS") {
                 const d = new Date();
                 d.setDate(today.getDate() - 7);
                 startDateStr = d.toISOString().split('T')[0];

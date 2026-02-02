@@ -99,6 +99,13 @@ def write_to_sheet(range_name: str, values: List[List[Any]]):
         valueInputOption='USER_ENTERED', body=body).execute()
     return result
 
+def clear_sheet(sheet_name: str):
+    service = get_service()
+    # Clears the entire sheet content
+    result = service.spreadsheets().values().clear(
+        spreadsheetId=SPREADSHEET_ID, range=sheet_name).execute()
+    return result
+
 def ensure_sheet_exists(sheet_name: str, headers: List[str] = None):
     service = get_service()
     spreadsheet = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
@@ -180,6 +187,7 @@ def get_all_job_descriptions():
     """
     Reads ActiveJobSheet and returns a dict mapping Job Title to JD details.
     Cached for 5 minutes (300 seconds) to improve performance.
+    Now includes Status column (Column F).
     """
     import time
     
@@ -190,19 +198,20 @@ def get_all_job_descriptions():
         return _JOB_CACHE["data"]
 
     try:
-        # Read all data fromActiveJobSheet
-        rows = read_sheet("ActiveJobSheet!A:E") # Assuming Title, Description, Skills, Projects are in first few columns
+        # Read all data from ActiveJobSheet including Status column (F)
+        rows = read_sheet("ActiveJobSheet!A:F")
         if not rows:
             return {}
         
-        # Headers: Job Title, Job Description, Required Skills, Top Projects
-        # We try to identify columns by header name, or fallback to indices 0, 1, 2, 3
+        # Headers: Job Title, Job Description, Required Skills, Top Projects, Timestamp, Status
+        # We try to identify columns by header name, or fallback to indices 0, 1, 2, 3, 4, 5
         headers = [h.strip().lower() for h in rows[0]]
         
         idx_title = -1
         idx_desc = -1
         idx_skills = -1
         idx_projects = -1
+        idx_status = -1
         
         # Smart column finding
         for i, col in enumerate(headers):
@@ -210,12 +219,14 @@ def get_all_job_descriptions():
             elif "description" in col or "jd" in col: idx_desc = i
             elif "skills" in col: idx_skills = i
             elif "project" in col: idx_projects = i
+            elif "status" in col: idx_status = i
             
         # Fallback to defaults if headers are weird or missing
         if idx_title == -1: idx_title = 0
         if idx_desc == -1: idx_desc = 1
         if idx_skills == -1: idx_skills = 2
         if idx_projects == -1: idx_projects = 3
+        if idx_status == -1: idx_status = 5  # Column F
         
         jobs_map = {}
         for row in rows[1:]: # Skip header
@@ -227,11 +238,14 @@ def get_all_job_descriptions():
             desc = row[idx_desc] if len(row) > idx_desc else ""
             skills = row[idx_skills] if len(row) > idx_skills else ""
             projects = row[idx_projects] if len(row) > idx_projects else ""
+            # Status defaults to "Active" if not set
+            status = row[idx_status].strip() if len(row) > idx_status and row[idx_status].strip() else "Active"
             
             jobs_map[title] = {
                 "description": desc,
                 "skills": skills,
-                "top_projects": projects
+                "top_projects": projects,
+                "status": status
             }
         
         # Update Cache
@@ -243,6 +257,44 @@ def get_all_job_descriptions():
     except Exception as e:
         print(f"❌ Error reading Job Descriptions: {e}")
         return {}
+
+def update_job_status(job_title: str, status: str) -> bool:
+    """
+    Updates the Status column (Column F) for a specific job in ActiveJobSheet.
+    Returns True if successful, False otherwise.
+    """
+    try:
+        # Read all job data to find the row index
+        rows = read_sheet("ActiveJobSheet!A:F")
+        if not rows:
+            return False
+        
+        # Find the row with matching job title (Column A)
+        target_row_idx = -1
+        for i, row in enumerate(rows):
+            if i == 0:  # Skip header
+                continue
+            if row and row[0].strip().lower() == job_title.strip().lower():
+                target_row_idx = i + 1  # Sheets are 1-indexed
+                break
+        
+        if target_row_idx == -1:
+            print(f"❌ Job '{job_title}' not found in ActiveJobSheet")
+            return False
+        
+        # Update Column F (Status) for this row
+        range_name = f"ActiveJobSheet!F{target_row_idx}"
+        write_to_sheet(range_name, [[status]])
+        
+        # Invalidate cache so next fetch gets fresh data
+        invalidate_job_cache()
+        
+        print(f"✅ Updated status for '{job_title}' to '{status}'")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error updating job status: {e}")
+        return False
 
 def get_all_job_titles():
     """
@@ -282,16 +334,16 @@ def get_candidate_name_by_email(job_title, email):
         rows = read_sheet(f"{sheet_name}!A:K")
         if not rows: return None
         
-        # Email is in Column J (index 9), Name in Column A (index 0)
+        # Email is in Column C (index 2), Name in Column E (index 4)
         # Headers are in row 0, data starts row 1
         
         target_email = email.lower().strip()
         
         for row in rows[1:]:
-            if len(row) > 9:
-                row_email = row[9].lower().strip()
+            if len(row) > 2:
+                row_email = row[2].lower().strip()
                 if row_email == target_email:
-                    return row[0].strip() # Name
+                    return row[4].strip() if len(row) > 4 else "Unknown" # Name
                     
         return None
     except Exception as e:

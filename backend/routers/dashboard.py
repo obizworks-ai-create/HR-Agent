@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 from typing import List, Dict, Any
 from services.sheets import read_sheet, get_all_job_titles, get_source_sheet_name, ensure_sheet_exists
 # NEW import
-from services.sheets import get_all_sheet_titles, batch_read_sheets
+from services.sheets import get_all_sheet_titles, batch_read_sheets, get_all_job_descriptions
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -12,11 +12,15 @@ def get_dashboard_stats():
     Returns aggregated statistics for the dashboard.
     Optimized to use BATCH fetching (2 API calls total instead of 2N+1).
     Now robust: Checks if sheets exist before requesting them.
+    Includes job status (Active/Idle) from ActiveJobSheet.
     """
     try:
         job_titles = get_all_job_titles()
         sheet_titles = get_all_sheet_titles()
         existing_sheets_set = set(sheet_titles)
+        
+        # Fetch job descriptions to get status
+        job_descriptions = get_all_job_descriptions()
         
         # Prepare ranges for batch fetching
         ranges = []
@@ -38,7 +42,7 @@ def get_dashboard_stats():
             
             # Range 2: Analysis Sheet
             analysis_sheet_name = f"Analysis - {job}"
-            r2 = f"'{analysis_sheet_name}'!A:G"
+            r2 = f"'{analysis_sheet_name}'!A:K"
             r2_key = ""
             if analysis_sheet_name in existing_sheets_set:
                 ranges.append(r2)
@@ -60,16 +64,22 @@ def get_dashboard_stats():
         total_processed = 0
         total_passed = 0
         total_selected = 0
+        active_roles_count = 0
         
         job_stats = []
         
         for job in job_titles:
+            # Get job status from job descriptions (defaults to "Active")
+            job_info = job_descriptions.get(job, {})
+            job_status = job_info.get("status", "Active")
+            
             stats = {
                 "job_title": job,
                 "received": 0,
                 "processed": 0,
                 "passed": 0,
-                "selected": 0
+                "selected": 0,
+                "status": job_status
             }
             
             # --- Process RECEIVED ---
@@ -90,8 +100,8 @@ def get_dashboard_stats():
                 
                 pass_count = 0
                 for r in rows_ana[1:]:
-                    if len(r) > 6:
-                        verdict = r[6].strip().upper()
+                    if len(r) > 10:
+                        verdict = r[10].strip().upper()
                         if verdict == "PASS":
                             pass_count += 1
                 
@@ -99,6 +109,10 @@ def get_dashboard_stats():
                 stats["selected"] = pass_count
                 
             job_stats.append(stats)
+            
+            # Count active roles
+            if job_status == "Active":
+                active_roles_count += 1
             
             # Accumulate
             total_received += stats["received"]
@@ -111,6 +125,7 @@ def get_dashboard_stats():
             "total_processed": total_processed,
             "total_passed": total_passed,
             "total_selected": total_selected,
+            "active_roles_count": active_roles_count,
             "job_stats": job_stats
         }
 

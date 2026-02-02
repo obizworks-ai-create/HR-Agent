@@ -3,7 +3,7 @@ import api from '../lib/api';
 import {
     LayoutDashboard, Users, FileText, CheckCircle,
     TrendingUp, RefreshCw, BarChart3, PieChart,
-    Briefcase
+    Briefcase, Loader2
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -11,6 +11,7 @@ const StatsDashboard = () => {
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [updatingStatus, setUpdatingStatus] = useState(null); // Track which job is being updated
 
     const fetchStats = async () => {
         setLoading(true);
@@ -29,6 +30,34 @@ const StatsDashboard = () => {
     useEffect(() => {
         fetchStats();
     }, []);
+
+    // Toggle job status between Active and Idle
+    const toggleStatus = async (jobTitle, currentStatus) => {
+        const newStatus = currentStatus === 'Active' ? 'Idle' : 'Active';
+        setUpdatingStatus(jobTitle);
+
+        try {
+            await api.put(`/jobs/${encodeURIComponent(jobTitle)}/status`, { status: newStatus });
+
+            // Update local state immediately for responsiveness
+            setStats(prev => ({
+                ...prev,
+                active_roles_count: newStatus === 'Active'
+                    ? prev.active_roles_count + 1
+                    : prev.active_roles_count - 1,
+                job_stats: prev.job_stats.map(job =>
+                    job.job_title === jobTitle
+                        ? { ...job, status: newStatus }
+                        : job
+                )
+            }));
+        } catch (err) {
+            console.error("Failed to update job status:", err);
+            alert(`Failed to update status: ${err.response?.data?.detail || err.message}`);
+        } finally {
+            setUpdatingStatus(null);
+        }
+    };
 
     // Metric Card Component
     const MetricCard = ({ title, value, icon: Icon, colorClass, bgClass }) => (
@@ -122,7 +151,9 @@ const StatsDashboard = () => {
                                 <Briefcase size={20} className="text-gray-400" />
                                 Funnel by Job Role
                             </h3>
-                            <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">{stats?.job_stats?.length || 0} Active Roles</span>
+                            <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+                                {stats?.active_roles_count ?? stats?.job_stats?.length ?? 0} Active Roles
+                            </span>
                         </div>
 
                         <div className="overflow-x-auto">
@@ -140,6 +171,9 @@ const StatsDashboard = () => {
                                 <tbody className="divide-y divide-gray-50">
                                     {stats?.job_stats?.map((job, i) => {
                                         const passRate = job.processed ? Math.round((job.passed / job.processed) * 100) : 0;
+                                        const isUpdating = updatingStatus === job.job_title;
+                                        const isActive = job.status === 'Active';
+
                                         return (
                                             <tr key={i} className="hover:bg-gray-50/80 transition-colors">
                                                 <td className="px-6 py-4 font-semibold text-gray-800">
@@ -166,15 +200,23 @@ const StatsDashboard = () => {
                                                     </div>
                                                 </td>
                                                 <td className="px-6 py-4 text-center">
-                                                    {job.received > 0 ? (
-                                                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-green-50 text-green-700">
-                                                            Active
-                                                        </span>
-                                                    ) : (
-                                                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-gray-100 text-gray-500">
-                                                            Idle
-                                                        </span>
-                                                    )}
+                                                    <button
+                                                        onClick={() => toggleStatus(job.job_title, job.status)}
+                                                        disabled={isUpdating}
+                                                        className={clsx(
+                                                            "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer",
+                                                            "hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed",
+                                                            isActive
+                                                                ? "bg-green-50 text-green-700 hover:bg-green-100 border border-green-200"
+                                                                : "bg-gray-100 text-gray-500 hover:bg-gray-200 border border-gray-200"
+                                                        )}
+                                                        title={`Click to set as ${isActive ? 'Idle' : 'Active'}`}
+                                                    >
+                                                        {isUpdating ? (
+                                                            <Loader2 size={12} className="animate-spin" />
+                                                        ) : null}
+                                                        {job.status || 'Active'}
+                                                    </button>
                                                 </td>
                                             </tr>
                                         )

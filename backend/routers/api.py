@@ -25,13 +25,65 @@ from services.sheets import read_sheet, write_to_sheet, ensure_sheet_exists, get
 from services.drive_service import list_files_in_folder, download_file
 from services.resume_parser import parse_resume, parse_resumes_batch
 import os
+import re
 import datetime
+import time
+
+# GLOBAL PROCESSING QUEUE to prevent parallel processing of the same candidate
+GLOBAL_PROCESSING_QUEUE = set()
+import threading
+GLOBAL_QUEUE_LOCK = threading.Lock()
+
+def process_candidates_sequentially(candidates_list: list):
+    """
+    Process candidates one by one with robust rate limit handling (Exponential Backoff).
+    Removes candidate from GLOBAL_PROCESSING_QUEUE when done.
+    """
+    print(f"🔄 Starting sequential processing of {len(candidates_list)} candidates...")
+    
+    for idx, initial_state in enumerate(candidates_list):
+        candidate_name = initial_state['candidate_data'].get('Name', 'Unknown')
+        job = initial_state['candidate_data'].get('Job Applied For', 'Unknown')
+        queue_key = f"{candidate_name}|{job}"
+
+        print(f"[{idx+1}/{len(candidates_list)}] 🧠 Processing {candidate_name} -> {job}")
+        
+        max_retries = 5
+        base_delay = 10 # Start with 10 seconds
+        
+        try:
+            for attempt in range(max_retries):
+                try:
+                    hr_pipeline_graph.invoke(initial_state)
+                    break # Success, exit retry loop
+                except Exception as e:
+                    error_str = str(e)
+                    if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str or "503" in error_str or "UNAVAILABLE" in error_str:
+                        wait_time = base_delay * (2 ** attempt) # 10, 20, 40, 80...
+                        print(f"⚠️ Transient Error ({error_str[:30]}) for {candidate_name}. Retrying in {wait_time}s (Attempt {attempt+1}/{max_retries})...")
+                        time.sleep(wait_time)
+                    else:
+                        print(f"❌ Error processing {candidate_name}: {e}")
+                        break # Non-retriable error
+        finally:
+            # CRITICAL: Release the lock for this candidate
+            with GLOBAL_QUEUE_LOCK:
+                if queue_key in GLOBAL_PROCESSING_QUEUE:
+                    GLOBAL_PROCESSING_QUEUE.remove(queue_key)
+                    print(f"🔓 Released Lock for '{queue_key}'")
+
+        # Standard safety sleep between successful calls to prevent immediate limit hit
+        if idx < len(candidates_list) - 1:
+            print("⏳ Paid tier: Minimal wait between calls...")
+            time.sleep(0.5)
+            
+    print("✅ Sequential processing complete.")
 
 @router.post("/submit-jd")
 def submit_jd(jd: JDSubmission):
-    # Enforce Headers for ActiveJobSheet
+    # Enforce Headers for ActiveJobSheet (including Status column)
     ensure_sheet_exists("ActiveJobSheet")
-    write_to_sheet("ActiveJobSheet!A1:E1", [["Job Title", "Description", "Required Skills", "Top Projects Reference", "Timestamp"]])
+    write_to_sheet("ActiveJobSheet!A1:F1", [["Job Title", "Description", "Required Skills", "Top Projects Reference", "Timestamp", "Status"]])
     
     result = extract_jd_requirements_node({"jd_text": jd.jd_text})
     
@@ -104,6 +156,10 @@ def import_from_drive(
         today = datetime.date.today()
         if time_period == "LAST_7_DAYS":
             computed_start = today - datetime.timedelta(days=7)
+            min_date = computed_start.isoformat()
+            max_date = today.isoformat()
+        elif time_period == "LAST_24_HOURS":
+            computed_start = today - datetime.timedelta(days=1)
             min_date = computed_start.isoformat()
             max_date = today.isoformat()
         elif time_period == "LAST_30_DAYS":
@@ -320,23 +376,69 @@ def import_from_drive(
         
         for idx, item in enumerate(valid_items):
             if idx < len(parsed_results):
+                # Get parsed data and target sheet
                 data = parsed_results[idx]
                 target_job_sheet = item['job_title']
                 
-                # Check Duplicates in THAT specific sheet (Identity Check)
+                # --- IDENTITY CHECK (Exact & Fuzzy) ---
                 sheet_data = get_sheet_data(target_job_sheet)
                 existing_identities = sheet_data['identities']
                 
+                # --- GLOBAL EMAIL HUNTER & DATA ALIGNMENT ---
+                extracted_email = ""
+                # 1. Search all string fields for an email
+                for key, val in data.items():
+                    if isinstance(val, str) and not extracted_email and val:
+                        match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', val)
+                        if match:
+                            extracted_email = match.group(0)
+                            break
+                            
                 name = data.get("Name", "Unknown").strip()
                 contact = data.get("Contact", "").strip()
+                
+                # 2. Fix "Degree in Contact" shift
+                is_degree_in_contact = any(deg in contact.lower() for deg in ["bba", "mba", "acca", "degree", "hons", "finance", "accounts"])
+                if is_degree_in_contact and extracted_email:
+                    # Move degree to qualification if qualification is empty or looks like a role
+                    qual = data.get("Qualification", "").strip()
+                    if not qual or "officer" in qual.lower() or "specialist" in qual.lower():
+                        data["Qualification"] = contact
+                        contact = extracted_email
+                elif not contact and extracted_email:
+                    contact = extracted_email
+                
+                # 3. Cache email in data object for analysis
+                data["Email"] = extracted_email
+                # --------------------------------------------
+
                 identity = (name.lower(), contact)
                 
+                # 1. Exact Match
                 if identity in existing_identities:
-                        print(f"⏭️ Duplicate Candidate Skipped in '{target_job_sheet}': {name}")
+                        print(f"⏭️ Duplicate Candidate Skipped in '{target_job_sheet}': {name} (Exact Match)")
                         continue
-                        
+                
+                # 2. Fuzzy Match (Name Similarity > 90%)
+                import difflib
+                is_fuzzy_duplicate = False
+                
+                for ex_name, ex_contact in list(existing_identities):
+                    # Compare Names Only
+                    try:
+                        ratio = difflib.SequenceMatcher(None, name.lower(), ex_name).ratio()
+                        if ratio > 0.95: # 0.95 Threshold (Stricter to avoid false positives like Absar vs Abrar)
+                             print(f"⏭️ Duplicate Candidate Skipped in '{target_job_sheet}': {name} ≈ {ex_name} ({ratio:.2f})")
+                             is_fuzzy_duplicate = True
+                             break
+                    except: pass
+                
+                if is_fuzzy_duplicate:
+                    continue
+
                 # Add to cache immediately
                 existing_identities.add(identity)
+
                 
                 # DATE EXTRACTION
                 # Use file createdTime if available, else today
@@ -403,12 +505,12 @@ def import_from_drive(
                         # Strict Check: If Source exists OR Name exists, SKIP.
                         # Name check is crucial for "Same person, slightly different file/contact"
                         if s_key in existing_sources:
-                            print(f"DEBUG: Gatekeeper skipped Source Match: {s_key}")
+                            print(f"DEBUG: Gatekeeper skipped Source Match: '{s_key}' (Already in sheet)")
                             duplicates_skipped += 1
                             continue
                         
                         if n_key in existing_names:
-                            print(f"DEBUG: Gatekeeper skipped Name Match: {n_key}")
+                            print(f"DEBUG: Gatekeeper skipped Name Match: '{n_key}' (Name collision in sheet)")
                             duplicates_skipped += 1
                             continue
                         
@@ -527,7 +629,10 @@ def import_from_drive(
     }
 
 @router.post("/trigger-candidate-sync")
-def trigger_sync(background_tasks: BackgroundTasks, job_filter: Optional[str] = None, time_period: Optional[str] = "ALL", custom_date: Optional[str] = None):
+def trigger_sync(background_tasks: BackgroundTasks, job_filter: Optional[str] = None, time_period: Optional[str] = "ALL", custom_date: Optional[str] = None, start_date: Optional[str] = None, end_date: Optional[str] = None):
+    print(f"------------ TRIGGER SYNC CALLED ------------")
+    print(f"Received params: job_filter='{job_filter}', time_period='{time_period}', start_date='{start_date}', end_date='{end_date}'")
+    
     # Enforce Headers for ALL Output Sheets
     ensure_sheet_exists("ActiveJobSheet")
     write_to_sheet("ActiveJobSheet!A1:B1", [["Timestamp", "Requirements JSON"]])
@@ -550,9 +655,10 @@ def trigger_sync(background_tasks: BackgroundTasks, job_filter: Optional[str] = 
         source_sheets_to_process.append(job_filter)
         
         # Load processed candidates (to avoid re-analyzing)
+        # Load processed candidates (to avoid re-analyzing)
         analysis_sheet_target = f"Analysis - {job_filter}"
-        ensure_sheet_exists(analysis_sheet_target, ["Candidate Name", "Match Score", "Strengths", "Weaknesses", "Experience Check", "Skill Match", "Verdict", "Timestamp", "Job Applied For"])
-        processed_rows = read_sheet(f"{analysis_sheet_target}!A:A")
+        ensure_sheet_exists(analysis_sheet_target, ["Job Applied For", "Timestamp", "Email", "Phone Number", "Candidate Name", "Strengths", "Weaknesses", "Experience Check", "Skill Match", "Match Score", "Verdict"])
+        processed_rows = read_sheet(f"{analysis_sheet_target}!E:E")
         if processed_rows and len(processed_rows) > 1:
              processed_names = {r[0] for r in processed_rows[1:]}
         print(f"DEBUG: Found {len(processed_names)} already processed candidates in '{analysis_sheet_target}'")
@@ -566,20 +672,38 @@ def trigger_sync(background_tasks: BackgroundTasks, job_filter: Optional[str] = 
 
     triggered_count = 0
     processed_identities_this_run = set()
+    candidates_to_process = []
     
-    # CALCULATE MIN DATE FOR PROCESSING
+    # CALCULATE DATE BOUNDS FOR PROCESSING
     min_date_obj = None
+    max_date_obj = None
     today = datetime.date.today()
+    
     if time_period == "LAST_7_DAYS":
         min_date_obj = today - datetime.timedelta(days=7)
+    elif time_period == "LAST_24_HOURS":
+        min_date_obj = today - datetime.timedelta(days=1)
     elif time_period == "LAST_30_DAYS":
         min_date_obj = today - datetime.timedelta(days=30)
-    elif time_period == "CUSTOM" and custom_date:
+    elif time_period == "CUSTOM" and start_date:
+        # Specific Date: start_date == end_date
+        try:
+            min_date_obj = datetime.date.fromisoformat(start_date)
+            max_date_obj = datetime.date.fromisoformat(end_date) if end_date else min_date_obj
+        except: pass
+    elif time_period == "CUSTOM_RANGE" and start_date and end_date:
+        # Date Range
+        try:
+            min_date_obj = datetime.date.fromisoformat(start_date)
+            max_date_obj = datetime.date.fromisoformat(end_date)
+        except: pass
+    # Fallback for old custom_date parameter
+    elif custom_date:
         try:
             min_date_obj = datetime.date.fromisoformat(custom_date)
         except: pass
     
-    print(f"DEBUG: Sync Filter - Period: {time_period}, Min Date: {min_date_obj}")
+    print(f"DEBUG: Sync Filter - Period: {time_period}, Min Date: {min_date_obj}, Max Date: {max_date_obj}")
 
     for source_name in source_sheets_to_process:
         rows = read_sheet(f"{source_name}!A:K", value_render_option='FORMULA') 
@@ -623,8 +747,13 @@ def trigger_sync(background_tasks: BackgroundTasks, job_filter: Optional[str] = 
                          # Skip old candidates
                          print(f"DEBUG: Skipping candidate {get_col(2)} - date {row_date} < {min_date_obj}")
                          continue
-                    else:
-                         print(f"DEBUG: Including candidate {get_col(2)} - date {row_date} >= {min_date_obj}")
+                    
+                    # Check upper bound if max_date is set
+                    if max_date_obj and row_date > max_date_obj:
+                         print(f"DEBUG: Skipping candidate {get_col(2)} - date {row_date} > {max_date_obj}")
+                         continue
+                    
+                    print(f"DEBUG: Including candidate {get_col(2)} - date {row_date} in range [{min_date_obj}, {max_date_obj or 'now'}]")
                 except Exception as e:
                     # Parse Error => Skip (Strict)
                     print(f"DEBUG: Strictly skipping due to date parse error for '{row_date_str}': {e}")
@@ -645,6 +774,24 @@ def trigger_sync(background_tasks: BackgroundTasks, job_filter: Optional[str] = 
 
             contact = get_col(3)
             if isinstance(contact, str) and contact.startswith("="): contact = contact[1:]
+            
+            # --- GLOBAL EMAIL HUNTER & RECOVERY ---
+            # Even if the sheet is scrambled, try to find an email in ALL columns
+            found_email = ""
+            for i in range(len(row)):
+                cell_val = str(get_col(i))
+                match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', cell_val)
+                if match:
+                    found_email = match.group(0)
+                    break
+            
+            # If contact has a degree and we found an email elsewhere, swap them for the LLM state
+            is_degree_in_contact = any(deg in str(contact).lower() for deg in ["bba", "mba", "acca", "degree", "hons", "finance", "accounts"])
+            if is_degree_in_contact and found_email:
+                contact = found_email
+            elif not contact and found_email:
+                contact = found_email
+            # --------------------------------------
             
             raw_job_title = str(get_col(9)).strip()
             if (raw_job_title == "N/A" or not raw_job_title) and source_name not in ["Candidates", "Sheet1"]:
@@ -679,6 +826,7 @@ def trigger_sync(background_tasks: BackgroundTasks, job_filter: Optional[str] = 
                 "Date": row_date_str, # Keep original string
                 "Name": name,
                 "Contact": contact,
+                "Email": found_email, # Dedicated Email Key
                 "Qualification": get_col(4),
                 "Current Position": get_col(5),
                 "Experience": get_col(6),
@@ -704,9 +852,25 @@ def trigger_sync(background_tasks: BackgroundTasks, job_filter: Optional[str] = 
                 "resume_url": resume_link
             }
             
+            # --- GLOBAL PROCESSING LOCK CHECK ---
+            # Prevent queuing if already in flight (Race Condition Fix)
+            queue_key = f"{name}|{matched_title}"
+            with GLOBAL_QUEUE_LOCK:
+                if queue_key in GLOBAL_PROCESSING_QUEUE:
+                    print(f"🔒 Skipping '{name}' - Already in Processing Queue (Global Lock)")
+                    continue
+                GLOBAL_PROCESSING_QUEUE.add(queue_key)
+            
             print(f"DEBUG: Queuing Analysis for '{name}' -> '{matched_title}'")
-            background_tasks.add_task(hr_pipeline_graph.invoke, initial_state)
+            # background_tasks.add_task(hr_pipeline_graph.invoke, initial_state)
+            # Instead of adding individual tasks, add to batch list for sequential processing
+            candidates_to_process.append(initial_state)
             triggered_count += 1
+            
+    # Submit the BATCH to run sequentially in background
+    if candidates_to_process:
+        print(f"🚀 Launching background task for {len(candidates_to_process)} candidates...")
+        background_tasks.add_task(process_candidates_sequentially, candidates_to_process)
             
     skipped_count = len(processed_names) if job_filter else 0 
     
@@ -729,9 +893,9 @@ def get_candidates(job_title: Optional[str] = None, start_date: Optional[str] = 
     target_sheet = f"Analysis - {job_title}"
     
     ANALYSIS_HEADERS = [
-        "Candidate Name", "Match Score", "Strengths", "Weaknesses", 
-        "Experience Check", "Skill Match", "Verdict", "Timestamp", 
-        "Job Applied For", "Email", "Contact"
+        "Job Applied For", "Timestamp", "Email", "Phone Number", 
+        "Candidate Name", "Strengths", "Weaknesses", "Experience Check", 
+        "Skill Match", "Match Score", "Verdict"
     ]
     
     ensure_sheet_exists(target_sheet, ANALYSIS_HEADERS)
@@ -933,6 +1097,31 @@ def get_jobs():
     print("DEBUG: Fetched & Cached Job Titles from Sheets")
     
     return titles
+
+class JobStatusUpdate(BaseModel):
+    status: str  # "Active" or "Idle"
+
+@router.put("/jobs/{job_title}/status")
+def update_job_status_endpoint(job_title: str, update: JobStatusUpdate):
+    """
+    Update the status of a job role (Active or Idle).
+    """
+    from services.sheets import update_job_status
+    
+    # Validate status value
+    if update.status not in ["Active", "Idle"]:
+        raise HTTPException(status_code=400, detail="Status must be 'Active' or 'Idle'")
+    
+    success = update_job_status(job_title, update.status)
+    
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Job '{job_title}' not found")
+    
+    # Invalidate get_jobs cache so next fetch reflects update
+    if hasattr(get_jobs, "cache"):
+        get_jobs.cache["timestamp"] = 0
+    
+    return {"message": f"Job '{job_title}' status updated to '{update.status}'"}
 
 class InterviewRequest(BaseModel):
     candidate_name: str
